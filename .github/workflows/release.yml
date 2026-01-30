@@ -1,0 +1,148 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build-macos:
+    runs-on: macos-latest
+    strategy:
+      matrix:
+        target: [x86_64-apple-darwin, aarch64-apple-darwin]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-action@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Build
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Create app bundle
+        run: |
+          APP_NAME="Baggie"
+          mkdir -p "target/${APP_NAME}.app/Contents/MacOS"
+          mkdir -p "target/${APP_NAME}.app/Contents/Resources"
+          cp "target/${{ matrix.target }}/release/baggie" "target/${APP_NAME}.app/Contents/MacOS/"
+          cp "Info.plist" "target/${APP_NAME}.app/Contents/"
+          cp "AppIcon.icns" "target/${APP_NAME}.app/Contents/Resources/"
+
+      - name: Import signing certificate
+        env:
+          MACOS_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE }}
+          MACOS_CERTIFICATE_PWD: ${{ secrets.MACOS_CERTIFICATE_PWD }}
+          KEYCHAIN_PWD: ${{ secrets.KEYCHAIN_PWD }}
+        run: |
+          echo $MACOS_CERTIFICATE | base64 --decode > certificate.p12
+          security create-keychain -p "$KEYCHAIN_PWD" build.keychain
+          security default-keychain -s build.keychain
+          security unlock-keychain -p "$KEYCHAIN_PWD" build.keychain
+          security import certificate.p12 -k build.keychain -P "$MACOS_CERTIFICATE_PWD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PWD" build.keychain
+
+      - name: Sign app
+        run: |
+          codesign --force --deep --options runtime --sign "Developer ID Application: oio.studio ltd (5H3PSA638Y)" "target/Baggie.app"
+          codesign --verify --verbose "target/Baggie.app"
+
+      - name: Notarize app
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+        run: |
+          ditto -c -k --keepParent "target/Baggie.app" "target/Baggie.zip"
+          xcrun notarytool submit "target/Baggie.zip" --apple-id "$APPLE_ID" --team-id "$APPLE_TEAM_ID" --password "$APPLE_APP_PASSWORD" --wait
+          xcrun stapler staple "target/Baggie.app"
+
+      - name: Create DMG
+        run: |
+          hdiutil create -volname "Baggie" -srcfolder "target/Baggie.app" -ov -format UDZO "target/Baggie-${{ matrix.target }}.dmg"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: baggie-${{ matrix.target }}
+          path: target/Baggie-${{ matrix.target }}.dmg
+
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-action@stable
+
+      - name: Build
+        run: cargo build --release
+
+      - name: Create archive
+        run: |
+          mkdir dist
+          cp target/release/baggie.exe dist/Baggie.exe
+          Compress-Archive -Path dist/Baggie.exe -DestinationPath Baggie-windows-x86_64.zip
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: baggie-windows-x86_64
+          path: Baggie-windows-x86_64.zip
+
+  build-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev libxkbcommon-dev libssl-dev libgtk-3-dev
+
+      - name: Install Rust
+        uses: dtolnay/rust-action@stable
+
+      - name: Build
+        run: cargo build --release
+
+      - name: Create archive
+        run: |
+          mkdir -p dist
+          cp target/release/baggie dist/baggie
+          cp icon.png dist/baggie.png
+          tar -czvf Baggie-linux-x86_64.tar.gz -C dist .
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: baggie-linux-x86_64
+          path: Baggie-linux-x86_64.tar.gz
+
+  release:
+    needs: [build-macos, build-windows, build-linux]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+    permissions:
+      contents: write
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Create release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: |
+            artifacts/baggie-x86_64-apple-darwin/Baggie-x86_64-apple-darwin.dmg
+            artifacts/baggie-aarch64-apple-darwin/Baggie-aarch64-apple-darwin.dmg
+            artifacts/baggie-windows-x86_64/Baggie-windows-x86_64.zip
+            artifacts/baggie-linux-x86_64/Baggie-linux-x86_64.tar.gz
+          generate_release_notes: true
