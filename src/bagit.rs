@@ -155,7 +155,7 @@ pub fn bag_directory(path: &Path, progress_tx: Option<Sender<Progress>>) -> Resu
     let date = chrono::Local::now().format("%Y-%m-%d").to_string();
     let payload_oxum = format!("{}.{}", total_bytes, file_count);
     let bag_info_content = format!(
-        "Bag-Software-Agent: baggie 0.1.0\nBagging-Date: {}\nPayload-Oxum: {}\n",
+        "Bag-Software-Agent: baggie 0.1.1\nBagging-Date: {}\nPayload-Oxum: {}\n",
         date, payload_oxum
     );
     fs::write(path.join("bag-info.txt"), &bag_info_content)?;
