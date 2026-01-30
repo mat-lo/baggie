@@ -41,11 +41,12 @@ jobs:
           MACOS_CERTIFICATE_PWD: ${{ secrets.MACOS_CERTIFICATE_PWD }}
           KEYCHAIN_PWD: ${{ secrets.KEYCHAIN_PWD }}
         run: |
-          echo "$MACOS_CERTIFICATE" | base64 -D -o certificate.p12
+          printf '%s' "$MACOS_CERTIFICATE" | base64 -D > certificate.p12
+          echo "Certificate file size: $(wc -c < certificate.p12) bytes"
           security create-keychain -p "$KEYCHAIN_PWD" build.keychain
           security default-keychain -s build.keychain
           security unlock-keychain -p "$KEYCHAIN_PWD" build.keychain
-          security import certificate.p12 -k build.keychain -P "$MACOS_CERTIFICATE_PWD" -T /usr/bin/codesign
+          security import certificate.p12 -k build.keychain -P "$MACOS_CERTIFICATE_PWD" -T /usr/bin/codesign -A
           security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PWD" build.keychain
 
       - name: Sign app
