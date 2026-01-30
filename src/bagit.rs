@@ -143,31 +143,38 @@ pub fn bag_directory(path: &Path, progress_tx: Option<Sender<Progress>>) -> Resu
     }
 
     // Write bagit.txt
-    let bagit_content = "BagIt-Version: 1.0\nTag-File-Character-Encoding: UTF-8\n";
+    let bagit_content = "BagIt-Version: 0.97\nTag-File-Character-Encoding: UTF-8\n";
     fs::write(path.join("bagit.txt"), bagit_content)?;
 
-    // Write manifest-sha256.txt
+    // Write manifest-sha256.txt (sorted for reproducibility, matching Python bagit)
+    manifest_entries.sort();
     let manifest_content = manifest_entries.join("\n") + "\n";
     fs::write(path.join("manifest-sha256.txt"), &manifest_content)?;
 
-    // Write bag-info.txt
+    // Write bag-info.txt (field order matches Python bagit library)
     let date = chrono::Local::now().format("%Y-%m-%d").to_string();
     let payload_oxum = format!("{}.{}", total_bytes, file_count);
     let bag_info_content = format!(
-        "Bagging-Date: {}\nBag-Software-Agent: baggie 0.1.0\nPayload-Oxum: {}\n",
+        "Bag-Software-Agent: baggie 0.1.0\nBagging-Date: {}\nPayload-Oxum: {}\n",
         date, payload_oxum
     );
     fs::write(path.join("bag-info.txt"), &bag_info_content)?;
 
-    // Write tagmanifest-sha256.txt
+    // Write tagmanifest-sha256.txt (sorted alphabetically to match Python bagit)
     let bagit_checksum = calculate_sha256_str(bagit_content);
     let manifest_checksum = calculate_sha256_str(&manifest_content);
     let bag_info_checksum = calculate_sha256_str(&bag_info_content);
 
-    let tagmanifest_content = format!(
-        "{}  bagit.txt\n{}  manifest-sha256.txt\n{}  bag-info.txt\n",
-        bagit_checksum, manifest_checksum, bag_info_checksum
-    );
+    let mut tagmanifest_entries = vec![
+        format!("{}  bag-info.txt", bag_info_checksum),
+        format!("{}  bagit.txt", bagit_checksum),
+        format!("{}  manifest-sha256.txt", manifest_checksum),
+    ];
+    tagmanifest_entries.sort_by(|a, b| {
+        // Sort by filename (after the checksum and spaces)
+        a.split_whitespace().last().cmp(&b.split_whitespace().last())
+    });
+    let tagmanifest_content = tagmanifest_entries.join("\n") + "\n";
     fs::write(path.join("tagmanifest-sha256.txt"), tagmanifest_content)?;
 
     if let Some(ref tx) = progress_tx {
@@ -214,7 +221,7 @@ mod tests {
 
         // Verify bagit.txt content
         let bagit_content = fs::read_to_string(temp_dir.join("bagit.txt")).unwrap();
-        assert!(bagit_content.contains("BagIt-Version: 1.0"));
+        assert!(bagit_content.contains("BagIt-Version: 0.97"));
         assert!(bagit_content.contains("Tag-File-Character-Encoding: UTF-8"));
 
         // Verify manifest has correct format and file count
